@@ -2,6 +2,16 @@
 #include <iostream>
 #include <string>
 
+struct SystemEvent {};
+
+struct SystemEventsReceiver : Receiver {
+  SystemEventsReceiver(EventMgr &ev) { ev.subscribe<SystemEvent>(*this); }
+
+  void receive(const SystemEvent &e) {
+    std::cout << "SystemEventsReceiver - Received event from systems!\n";
+  }
+};
+
 struct GameObjectCmp : Cmp<GameObjectCmp> {
   GameObjectCmp() {}
   GameObjectCmp(const std::string &name, const std::string &tag)
@@ -59,12 +69,17 @@ struct GameObjectSys : System {
 
   void render(EntityMgr &es, Renderer r) { std::cout << "RENDER\n\n"; }
 
-  void clean(EntityMgr &es) { std::cout << "CLEAN\n\n"; }
+  void clean(EntityMgr &es) {
+    getEventMgr().broadcast<SystemEvent>();
+    std::cout << "CLEAN\n\n";
+  }
 };
 
-/// EventMgr eventMgr;
+EventMgr eventMgr;
 EntityMgr entityMgr;
-SystemMgr systemMgr(entityMgr);
+SystemMgr systemMgr(entityMgr, eventMgr);
+
+SystemEventsReceiver receiver(eventMgr);
 
 bool running = true;
 

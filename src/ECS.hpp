@@ -42,8 +42,11 @@ template <typename E> struct Cmp : ICmp {
 class EntityMgr;
 
 struct Entity {
+private:
+  friend class EntityMgr;
   Entity(size_t id, EntityMgr &entityMgr) : m_id(id), m_entityMgr(entityMgr) {}
 
+public:
   template <typename C> inline void addComponent(const C &cmp) const;
 
   template <typename C, typename... Args>
@@ -139,21 +142,32 @@ template <typename C> inline void Entity::removeComponent() const {
 struct Settings {};
 struct Renderer {};
 
+class EventMgr;
+
 struct System {
   virtual void init(EntityMgr &es, Settings s) = 0;
   virtual void update(EntityMgr &es, float dt) = 0;
   virtual void render(EntityMgr &es, Renderer r) = 0;
   virtual void clean(EntityMgr &es) = 0;
+
+  inline EventMgr &getEventMgr() { return *m_eventMgr; }
+
+private:
+  friend class SystemMgr;
+  EventMgr *m_eventMgr;
 };
 
 using Systems = std::vector<System *>;
 
 class SystemMgr {
 public:
-  SystemMgr(EntityMgr &entityMgr) : m_entityMgr(entityMgr) {}
+  SystemMgr(EntityMgr &entityMgr, EventMgr &eventMgr)
+      : m_entityMgr(entityMgr), m_eventMgr(eventMgr) {}
 
   template <typename Sys, typename... Args> void addSys(Args... args) {
-    m_systems.emplace_back(new Sys(args...));
+    auto sys = new Sys(args...);
+    sys->m_eventMgr = &m_eventMgr;
+    m_systems.emplace_back(sys);
   }
 
   template <typename Sys> void removeSys() {}
@@ -184,6 +198,7 @@ public:
 
 private:
   EntityMgr &m_entityMgr;
+  EventMgr &m_eventMgr;
   Systems m_systems;
 };
 
@@ -282,10 +297,10 @@ public:
 private:
   using SigSlots = std::unordered_map<size_t, SigSPtr>;
 
-  std::pair<size_t, SigSlots> &slotsFor(size_t eID) {
-    if (eID >= m_bus.size())
-      m_bus.resize(eID + 1);
-    return m_bus[eID];
+  std::pair<size_t, SigSlots> &slotsFor(size_t eId) {
+    if (eId >= m_bus.size())
+      m_bus.resize(eId + 1);
+    return m_bus[eId];
   }
 
   void clearSignals(std::vector<SigHandle> &sigHandles) {
