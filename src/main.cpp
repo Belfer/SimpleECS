@@ -10,46 +10,90 @@ struct GameObjectCmp : Cmp<GameObjectCmp> {
   std::string tag;
 };
 
+struct TransformCmp : Cmp<TransformCmp> {
+  TransformCmp() {}
+  TransformCmp(float pX, float pY, float sX, float sY, float rot)
+      : pX(pX), pY(pY), sX(sX), sY(sY), rot(rot) {}
+  float pX = 0, pY = 0;
+  float sX = 0, sY = 0;
+  float rot = 0;
+};
+
 struct GameObjectSys : System {
-  void init(Entities &es, Settings s) {
-    for (auto &e : es) {
+  void init(EntityMgr &es, Settings s) {
+    std::cout << "INIT\n";
+
+    for (auto &e : es.entities()) {
       if (e.hasComponent<GameObjectCmp>()) {
         auto &goc = e.getComponent<GameObjectCmp>();
+        goc.name = "playerMod";
+        goc.tag = "testMod";
+
         std::cout << goc.name << ", " << goc.tag << "\n";
       }
     }
+
+    std::cout << "\n";
   }
 
-  void update(Entities &es, float dt) {}
+  void update(EntityMgr &es, float dt) {
+    std::cout << "UPDATE\n";
 
-  void render(Entities &es, Renderer r) {}
+    for (auto &e : es.entities()) {
+      if (e.hasComponent<GameObjectCmp>() && e.hasComponent<TransformCmp>()) {
+        auto &goc = e.getComponent<GameObjectCmp>();
+        auto &trx = e.getComponent<TransformCmp>();
 
-  void clean(Entities &es) {}
+        std::cout << trx.pY << "\n";
+        std::cout << goc.name << ", " << goc.tag << "\n";
+
+        goc.name = "player";
+        goc.tag = "test";
+
+        trx.pY += 1;
+      }
+    }
+
+    std::cout << "\n";
+  }
+
+  void render(EntityMgr &es, Renderer r) { std::cout << "RENDER\n\n"; }
+
+  void clean(EntityMgr &es) { std::cout << "CLEAN\n\n"; }
 };
 
-WorldMgr worldMgr;
+/// EventMgr eventMgr;
+EntityMgr entityMgr;
+SystemMgr systemMgr(entityMgr);
 
 bool running = true;
 
 void run() {
   Settings s;
   Renderer r;
-  float dt = 0;
+  float dt = 1.f / 60.f;
 
-  worldMgr.init(s);
+  size_t ticks = 0;
+
+  systemMgr.init(s);
   while (running) {
-    worldMgr.update(dt);
-    worldMgr.render(r);
+    systemMgr.update(dt);
+    systemMgr.render(r);
+
+    ticks++;
+    if (ticks >= 10)
+      running = false;
   }
-  worldMgr.clean();
+  systemMgr.clean();
 }
 
 int main(int argc, char **args) {
-  worldMgr.addSys<GameObjectSys>();
+  systemMgr.addSys<GameObjectSys>();
 
-  Entity e = worldMgr.createEntity();
+  Entity e = entityMgr.createEntity();
   e.addComponent<GameObjectCmp>("player", "test");
-  worldMgr.addEntity(e);
+  e.addComponent<TransformCmp>();
+  entityMgr.addEntity(e);
 
   run();
   return 0;

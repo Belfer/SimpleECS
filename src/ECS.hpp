@@ -6,6 +6,10 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @brief Utility
+ */
+
 struct NonCopyable {
 protected:
   NonCopyable() = default;
@@ -16,10 +20,14 @@ private:
   NonCopyable &operator=(const NonCopyable &) = delete;
 };
 
+/**
+ * @brief Entities
+ */
+
 struct ICmp {
 protected:
   static size_t regId() {
-    static size_t s_cmpCounter = 0;
+    static size_t s_cmpCounter = -1;
     return ++s_cmpCounter;
   }
 };
@@ -31,10 +39,43 @@ template <typename E> struct Cmp : ICmp {
   }
 };
 
-struct Entity;
+class EntityMgr;
 
-class ComponentMgr {
+struct Entity {
+  Entity(size_t id, EntityMgr &entityMgr) : m_id(id), m_entityMgr(entityMgr) {}
+
+  template <typename C> inline void addComponent(const C &cmp) const;
+
+  template <typename C, typename... Args>
+  inline void addComponent(Args... args) const;
+
+  template <typename C> inline bool hasComponent() const;
+
+  template <typename C> inline C &getComponent() const;
+
+  template <typename C> inline void removeComponent() const;
+
+  inline size_t id() const { return m_id; }
+
+private:
+  size_t m_id;
+  std::vector<size_t> m_cmps;
+  EntityMgr &m_entityMgr;
+};
+
+using Entities = std::vector<Entity>;
+
+class EntityMgr {
 public:
+  Entity createEntity() {
+    static size_t s_entityCounter = -1;
+    return Entity(++s_entityCounter, *this);
+  }
+
+  void addEntity(Entity e) { m_entities.emplace_back(e); }
+
+  void removeEntity(Entity e) {}
+
   template <typename C> void addComponent(size_t eId, const C &cmp) {
     m_cmpMap[cmp.id()][eId] = cmp;
   }
@@ -56,94 +97,99 @@ public:
     return *static_cast<C *>(m_cmpMap[Cmp<C>::id()][eId]);
   }
 
-  void removeComponent(Entity e, size_t id);
+  template <typename C> void removeComponent(Entity e) {
+    // delete m_cmpMapCmp<C>::id()[e.id()];
+    // m_cmpMap[Cmp<C>::id()].erase(e.id());
+  }
+
+  inline Entities &entities() { return m_entities; }
 
 private:
   using CmpPool = std::unordered_map<size_t, ICmp *>;
   using CmpMap = std::unordered_map<size_t, CmpPool>;
   CmpMap m_cmpMap;
+  Entities m_entities;
 };
 
-struct Entity {
-  Entity(size_t id, ComponentMgr &cmpMgr) : m_id(id), m_cmpMgr(cmpMgr) {}
+template <typename C> inline void Entity::addComponent(const C &cmp) const {
+  m_entityMgr.addComponent(id(), cmp);
+}
 
-  template <typename C> inline void addComponent(const C &cmp) {
-    m_cmpMgr.addComponent(id(), cmp);
-  }
+template <typename C, typename... Args>
+inline void Entity::addComponent(Args... args) const {
+  m_entityMgr.addComponent<C>(id(), std::forward<Args>(args)...);
+}
 
-  template <typename C, typename... Args>
-  inline void addComponent(Args... args) {
-    m_cmpMgr.addComponent<C>(id(), std::forward<Args>(args)...);
-  }
+template <typename C> inline bool Entity::hasComponent() const {
+  return m_entityMgr.hasComponent<C>(id());
+}
 
-  template <typename C> inline bool hasComponent() const {
-    return m_cmpMgr.hasComponent<C>(id());
-  }
+template <typename C> inline C &Entity::getComponent() const {
+  return m_entityMgr.getComponent<C>(id());
+}
 
-  template <typename C> inline C &getComponent() const {
-    return m_cmpMgr.getComponent<C>(id());
-  }
+template <typename C> inline void Entity::removeComponent() const {
+  m_entityMgr.removeComponent<C>();
+}
 
-  inline void removeComponent(size_t cId);
-
-  inline size_t id() const { return m_id; }
-
-private:
-  size_t m_id;
-  std::vector<size_t> m_cmps;
-  ComponentMgr &m_cmpMgr;
-};
-
-using Entities = std::vector<Entity>;
+/**
+ * @brief Systems
+ */
 
 struct Settings {};
 struct Renderer {};
 
 struct System {
-  virtual void init(Entities &es, Settings s) = 0;
-  virtual void update(Entities &es, float dt) = 0;
-  virtual void render(Entities &es, Renderer r) = 0;
-  virtual void clean(Entities &es) = 0;
+  virtual void init(EntityMgr &es, Settings s) = 0;
+  virtual void update(EntityMgr &es, float dt) = 0;
+  virtual void render(EntityMgr &es, Renderer r) = 0;
+  virtual void clean(EntityMgr &es) = 0;
 };
 
 using Systems = std::vector<System *>;
 
-class EntityMgr {
-public:
-  Entity createEntity();
-
-  void addEntity(Entity e);
-
-  void removeEntity(Entity e);
-
-private:
-  Entities m_es;
-};
-
 class SystemMgr {
 public:
+  SystemMgr(EntityMgr &entityMgr) : m_entityMgr(entityMgr) {}
+
   template <typename Sys, typename... Args> void addSys(Args... args) {
-    m_ss.emplace_back(new Sys(args...));
+    m_systems.emplace_back(new Sys(args...));
   }
 
-  // template <typename Sys> void removeSys(Sys s) { m_ss.emplace_back(s); }
+  template <typename Sys> void removeSys() {}
+
+  inline void init(Settings s) {
+    for (auto &sys : m_systems) {
+      sys->init(m_entityMgr, s);
+    }
+  }
+
+  inline void update(float dt) {
+    for (auto &sys : m_systems) {
+      sys->update(m_entityMgr, dt);
+    }
+  }
+
+  inline void render(Renderer r) {
+    for (auto &sys : m_systems) {
+      sys->render(m_entityMgr, r);
+    }
+  }
+
+  inline void clean() {
+    for (auto &sys : m_systems) {
+      sys->clean(m_entityMgr);
+    }
+  }
 
 private:
-  Systems m_ss;
+  EntityMgr &m_entityMgr;
+  Systems m_systems;
 };
 
-class WorldMgr {
-public:
-  void init(Settings s);
-  void update(float dt);
-  void render(Renderer r);
-  void clean();
-
-private:
-  EntityMgr m_es;
-  SystemMgr m_ss;
-  EventMgr m_ev;
-};
+/**
+ * @brief Events
+ */
 
 struct ISig {
   virtual ~ISig() {}
