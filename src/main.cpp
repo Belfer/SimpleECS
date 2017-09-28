@@ -1,4 +1,4 @@
-#include "ECS.hpp"
+#include "simpleECS.hpp"
 #include <iostream>
 #include <string>
 
@@ -29,8 +29,8 @@ struct TransformCmp : Cmp<TransformCmp> {
   float rot = 0;
 };
 
-struct GameObjectSys : System {
-  void init(EntityMgr &es, Settings s) {
+struct GameObjectSys : Sys<GameObjectSys> {
+  void init(EntityMgr &es) {
     std::cout << "INIT\n";
 
     for (auto &e : es.entities()) {
@@ -67,7 +67,7 @@ struct GameObjectSys : System {
     std::cout << "\n";
   }
 
-  void render(EntityMgr &es, Renderer r) { std::cout << "RENDER\n\n"; }
+  void render(EntityMgr &es) { std::cout << "RENDER\n\n"; }
 
   void clean(EntityMgr &es) {
     getEventMgr().broadcast<SystemEvent>();
@@ -84,16 +84,14 @@ SystemEventsReceiver receiver(eventMgr);
 bool running = true;
 
 void run() {
-  Settings s;
-  Renderer r;
   float dt = 1.f / 60.f;
 
   size_t ticks = 0;
 
-  systemMgr.init(s);
+  systemMgr.init();
   while (running) {
     systemMgr.update(dt);
-    systemMgr.render(r);
+    systemMgr.render();
 
     ticks++;
     if (ticks >= 10)
@@ -105,10 +103,12 @@ void run() {
 int main(int argc, char **args) {
   systemMgr.addSys<GameObjectSys>();
 
-  Entity e = entityMgr.createEntity();
-  e.addComponent<GameObjectCmp>("player", "test");
-  e.addComponent<TransformCmp>();
-  entityMgr.addEntity(e);
+  for (uint i = 0; i < 10; ++i) {
+    Entity e = entityMgr.createEntity();
+    e.addComponent<GameObjectCmp>("player", "test");
+    e.addComponent<TransformCmp>();
+    entityMgr.addEntity(e);
+  }
 
   run();
   return 0;

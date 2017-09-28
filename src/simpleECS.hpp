@@ -1,5 +1,6 @@
 #pragma once
 
+#include <assert.h>
 #include <memory>
 #include <stdlib.h>
 #include <unordered_map>
@@ -20,6 +21,78 @@ private:
   NonCopyable &operator=(const NonCopyable &) = delete;
 };
 
+struct IPool {
+  virtual ~IPool() {}
+  virtual void clear() = 0;
+};
+
+template <typename T> class Pool : public IPool {
+public:
+  Pool(int size = 100) { resize(size); }
+  virtual ~Pool() {}
+
+  inline bool empty() const { return m_data.empty(); }
+
+  inline uint size() const { return m_data.size(); }
+
+  inline void resize(int n) {
+    const size_t dataSize = size();
+    m_data.resize(n);
+    if (size() > dataSize) {
+      for (auto it = m_data.begin() + dataSize; it != m_data.end(); ++it) {
+        it->first = false;
+      }
+    }
+  }
+
+  inline void clear() { m_data.clear(); }
+
+  inline void remove(const T &object) {
+    m_data.erase(std::remove(m_data.begin(), m_data.end(), object),
+                 m_data.end());
+  }
+
+  inline void remove(uint index) { m_data.erase(m_data.begin() + index); }
+
+  inline bool set(uint index, const T &object) {
+    assert(index < size());
+    m_data[index].first = true;
+    m_data[index].second = object;
+    return true;
+  }
+
+  inline T &get(uint index) {
+    assert(index < size());
+    return static_cast<T &>(m_data[index].second);
+  }
+
+  inline T &recycle() {
+    for (auto &e : m_data) {
+      if (!e.first) {
+        e.first = true;
+        return static_cast<T &>(e.second);
+      }
+    }
+
+    resize(size() * 2);
+    return recycle();
+  }
+
+  inline void add(const T &object) {
+    auto &obj = recycle();
+    obj = object;
+  }
+
+  inline T &operator[](uint index) { return m_data[index].second; }
+
+  inline const T &operator[](uint index) const { return m_data[index].second; }
+
+  inline std::vector<std::pair<bool, T>> &data() { return m_data; }
+
+private:
+  std::vector<std::pair<bool, T>> m_data;
+};
+
 /**
  * @brief Entities
  */
@@ -32,7 +105,7 @@ protected:
   }
 };
 
-template <typename E> struct Cmp : ICmp {
+template <typename E> struct Cmp : public ICmp {
   static size_t id() {
     static const size_t s_id = regId();
     return s_id;
@@ -62,13 +135,26 @@ public:
 
 private:
   size_t m_id;
-  std::vector<size_t> m_cmps;
   EntityMgr &m_entityMgr;
+  std::vector<size_t> m_cmps;
 };
 
 using Entities = std::vector<Entity>;
-
+#include <iostream>
 class EntityMgr {
+private:
+  template <typename C> using CmpPool = Pool<std::pair<size_t, C>>;
+  using CmpMap = std::unordered_map<size_t, IPool *>;
+
+  template <typename C> inline CmpPool<C> &getPool() {
+    auto handle = static_cast<CmpPool<C> *>(m_cmpMap[Cmp<C>::id()]);
+    if (handle == nullptr) {
+      handle = new CmpPool<C>();
+      m_cmpMap[Cmp<C>::id()] = handle;
+    }
+    return *handle;
+  }
+
 public:
   Entity createEntity() {
     static size_t s_entityCounter = -1;
@@ -79,37 +165,49 @@ public:
 
   void removeEntity(Entity e) {}
 
-  template <typename C> void addComponent(size_t eId, const C &cmp) {
-    m_cmpMap[cmp.id()][eId] = cmp;
+  template <typename C> void addComponent(Entity e, const C &cmp) {
+    auto &poolHandle = getPool<C>();
+    poolHandle.add(std::make_pair(e.id(), cmp));
   }
 
   template <typename C, typename... Args>
-  void addComponent(size_t eId, Args... args) {
-    m_cmpMap[Cmp<C>::id()][eId] = new C(args...);
+  void addComponent(Entity e, Args... args) {
+    auto &poolHandle = getPool<C>();
+    poolHandle.add(std::make_pair(e.id(), C(args...)));
   }
 
-  template <typename C> bool hasComponent(size_t eId) {
-    for (auto c : m_cmpMap[Cmp<C>::id()]) {
-      if (c.first == eId)
+  template <typename C> bool hasComponent(Entity e) {
+    auto &poolHandle = getPool<C>();
+    for (auto data : poolHandle.data()) {
+      if (data.first && data.second.first == e.id()) {
         return true;
+      }
     }
     return false;
   }
 
-  template <typename C> C &getComponent(size_t eId) {
-    return *static_cast<C *>(m_cmpMap[Cmp<C>::id()][eId]);
+  template <typename C> C &getComponent(Entity e) {
+    auto &poolHandle = getPool<C>();
+    for (auto &data : poolHandle.data()) {
+      if (data.first && data.second.first == e.id()) {
+        return data.second.second;
+      }
+    }
+    assert(false && "Entity doesn't have component!");
   }
 
   template <typename C> void removeComponent(Entity e) {
-    // delete m_cmpMapCmp<C>::id()[e.id()];
-    // m_cmpMap[Cmp<C>::id()].erase(e.id());
+    auto poolHandle = getPool<C>();
+    for (auto data : poolHandle.data()) {
+      if (data.first == e.id()) {
+        poolHandle.remove(data);
+      }
+    }
   }
 
   inline Entities &entities() { return m_entities; }
 
 private:
-  using CmpPool = std::unordered_map<size_t, ICmp *>;
-  using CmpMap = std::unordered_map<size_t, CmpPool>;
   CmpMap m_cmpMap;
   Entities m_entities;
 };
@@ -120,15 +218,15 @@ template <typename C> inline void Entity::addComponent(const C &cmp) const {
 
 template <typename C, typename... Args>
 inline void Entity::addComponent(Args... args) const {
-  m_entityMgr.addComponent<C>(id(), std::forward<Args>(args)...);
+  m_entityMgr.addComponent<C>(*this, std::forward<Args>(args)...);
 }
 
 template <typename C> inline bool Entity::hasComponent() const {
-  return m_entityMgr.hasComponent<C>(id());
+  return m_entityMgr.hasComponent<C>(*this);
 }
 
 template <typename C> inline C &Entity::getComponent() const {
-  return m_entityMgr.getComponent<C>(id());
+  return m_entityMgr.getComponent<C>(*this);
 }
 
 template <typename C> inline void Entity::removeComponent() const {
@@ -139,16 +237,26 @@ template <typename C> inline void Entity::removeComponent() const {
  * @brief Systems
  */
 
-struct Settings {};
-struct Renderer {};
-
 class EventMgr;
 
-struct System {
-  virtual void init(EntityMgr &es, Settings s) = 0;
+struct ISys {
+  virtual void init(EntityMgr &es) = 0;
   virtual void update(EntityMgr &es, float dt) = 0;
-  virtual void render(EntityMgr &es, Renderer r) = 0;
+  virtual void render(EntityMgr &es) = 0;
   virtual void clean(EntityMgr &es) = 0;
+
+protected:
+  static size_t regId() {
+    static size_t s_sysCounter = -1;
+    return ++s_sysCounter;
+  }
+};
+
+template <typename E> struct Sys : public ISys {
+  static size_t id() {
+    static const size_t s_id = regId();
+    return s_id;
+  }
 
   inline EventMgr &getEventMgr() { return *m_eventMgr; }
 
@@ -157,24 +265,26 @@ private:
   EventMgr *m_eventMgr;
 };
 
-using Systems = std::vector<System *>;
+using Systems = std::vector<ISys *>;
 
 class SystemMgr {
 public:
   SystemMgr(EntityMgr &entityMgr, EventMgr &eventMgr)
       : m_entityMgr(entityMgr), m_eventMgr(eventMgr) {}
 
-  template <typename Sys, typename... Args> void addSys(Args... args) {
-    auto sys = new Sys(args...);
+  template <typename S, typename... Args> void addSys(Args... args) {
+    auto sys = new S(args...);
     sys->m_eventMgr = &m_eventMgr;
     m_systems.emplace_back(sys);
   }
 
-  template <typename Sys> void removeSys() {}
+  template <typename Sys> void removeSys() {
+    // TODO
+  }
 
-  inline void init(Settings s) {
+  inline void init() {
     for (auto &sys : m_systems) {
-      sys->init(m_entityMgr, s);
+      sys->init(m_entityMgr);
     }
   }
 
@@ -184,9 +294,9 @@ public:
     }
   }
 
-  inline void render(Renderer r) {
+  inline void render() {
     for (auto &sys : m_systems) {
-      sys->render(m_entityMgr, r);
+      sys->render(m_entityMgr);
     }
   }
 
